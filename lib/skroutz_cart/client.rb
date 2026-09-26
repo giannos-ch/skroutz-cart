@@ -1,4 +1,6 @@
 require 'uri'
+require 'cgi'
+require 'json'
 require_relative 'constants'
 require_relative 'helpers'
 require_relative 'models/cart_item'
@@ -25,32 +27,40 @@ module SkroutzCart
     end
 
     def fetch_shop_offers(sku_id)
-      uri = URI.parse("#{Constants::BASE_URL}/s/#{sku_id}/filter_products.json")
-      response = Helpers.fetch(uri, @headers)
+      uri = URI.parse("#{Constants::BASE_URL}/s/#{sku_id}/shops_list")
+      headers = @headers.merge(
+        'Accept' => 'text/html, application/xhtml+xml',
+        'turbo-frame' => 'shops-list-frame'
+      )
+      html = Helpers.fetch_html(uri, headers)
+      return [] unless html
 
-      offers = []
-      product_cards = response['product_cards'] || {}
+      html = html.dup.force_encoding('UTF-8')
 
-      product_cards.each do |_, card|
-        next unless card['ecommerce_available'] == true
+      offers = {}
+      html.split(/<li id="shop-/).drop(1).each do |card|
+        shop_id    = card[/data-shop-id="(\d+)"/, 1]
+        price      = card[/data-raw-price="([\d.]+)"/, 1]&.to_f
+        product_id = card[%r{data-product-url="/products/show/(\d+)"}, 1] || card[/data-card-id="(\d+)"/, 1]
+        next unless shop_id && product_id && price && price > 0
 
-        product = card['products']&.first
-        next unless product
+        shop_name = card[%r{/shop/\d+/([^/"#?]+)}, 1]&.gsub('-', ' ') || "Shop #{shop_id}"
+        gtag = card[/gtag-sku-value="(\{.+?\})"/, 1]
+        product_name = gtag && (JSON.parse(CGI.unescapeHTML(gtag))['name'] rescue nil)
 
-        price = Helpers.parse_price(card['price'])
-        next if price <= 0
+        existing = offers[shop_id]
+        next if existing && existing.price <= price
 
-        shop_offer = ShopOffer.new(
-          shop_id: card['shop_id'],
-          shop_name: card['shop_name'] || "Shop #{card['shop_id']}",
+        offers[shop_id] = ShopOffer.new(
+          shop_id: shop_id.to_i,
+          shop_name: shop_name,
           price: price,
-          product_name: product['name'],
-          product_id: product['id']
+          product_name: product_name,
+          product_id: product_id.to_i
         )
-        offers << shop_offer
       end
 
-      offers.sort_by(&:price)
+      offers.values.sort_by(&:price)
     end
 
     def fetch_csrf_token
