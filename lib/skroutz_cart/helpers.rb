@@ -7,6 +7,15 @@ require_relative 'constants'
 require_relative 'cache'
 
 module SkroutzCart
+  class FetchError < StandardError
+    attr_reader :code
+
+    def initialize(code, body = nil)
+      @code = code
+      super("HTTP #{code}#{body ? " - #{body[0..200]}" : ''}")
+    end
+  end
+
   module Helpers
     def self.parse_price(price_str)
       return 0.0 unless price_str
@@ -61,9 +70,7 @@ module SkroutzCart
         redirect_uri = URI.parse(response['location'])
         fetch(redirect_uri, headers)
       else
-        puts "Error: HTTP #{response.code}"
-        puts response.body[0..500]
-        exit 1
+        raise FetchError.new(response.code, response.body)
       end
     end
 
