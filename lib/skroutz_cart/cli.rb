@@ -76,6 +76,9 @@ module SkroutzCart
       client = Client.new(options[:cookie])
       CartRunner.find_cheapest(client, verbose: options[:verbose], confirm: options[:confirm],
                                        algorithm: options[:algorithm])
+    rescue FetchError => e
+      puts "Error: #{e.message}"
+      exit 1
     end
   end
 end
