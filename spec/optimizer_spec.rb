@@ -4,13 +4,14 @@ require 'skroutz_cart/models/shop_offer'
 
 RSpec.describe SkroutzCart::Optimizer do
   # Helper to build a ShopOffer quickly
-  def offer(shop_id:, price:, product_id: nil, product_name: 'Product')
+  def offer(shop_id:, price:, product_id: nil, product_name: 'Product', free_shipping: false)
     SkroutzCart::ShopOffer.new(
       shop_id: shop_id,
       shop_name: "Shop #{shop_id}",
       price: price,
       product_name: product_name,
-      product_id: product_id || shop_id * 100
+      product_id: product_id || shop_id * 100,
+      free_shipping: free_shipping
     )
   end
 
@@ -48,6 +49,30 @@ RSpec.describe SkroutzCart::Optimizer do
       # subtotal 20.0 ≥ 15 → free shipping
       cost = described_class.compute_total_cost(assignment, sku_ids, quantities)
       expect(cost).to be_within(0.001).of(20.0)
+    end
+
+    it 'never adds shipping for free-shipping (Skroutz Hub) shops' do
+      cost = described_class.compute_total_cost([offer(shop_id: 1, price: 5.0, free_shipping: true)], ['sku1'], { 'sku1' => 1 })
+      expect(cost).to be_within(0.001).of(5.0)
+    end
+  end
+
+  describe 'Skroutz Hub offers' do
+    let(:cheap) { offer(shop_id: 1, price: 5.0) }
+    let(:hub) { offer(shop_id: 2, price: 6.0, free_shipping: true) }
+    let(:sku_offers) { { 'sku1' => [cheap, hub] } }
+    let(:quantities) { { 'sku1' => 1 } }
+
+    it 'subset_dp prefers the hub offer over a cheaper one that pays shipping' do
+      expect(described_class.subset_dp(['sku1'], sku_offers, quantities)['sku1']).to eq(hub)
+    end
+
+    it 'branch_and_bound prefers the hub offer over a cheaper one that pays shipping' do
+      expect(described_class.branch_and_bound(['sku1'], sku_offers, quantities)).to eq([hub])
+    end
+
+    it 'filter_candidates keeps the hub offer within one shipping fee of the cheapest' do
+      expect(described_class.filter_candidates(sku_offers)['sku1']).to include(hub)
     end
   end
 

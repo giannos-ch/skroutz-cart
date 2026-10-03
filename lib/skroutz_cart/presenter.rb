@@ -10,7 +10,8 @@ module SkroutzCart
       assignment.each_with_index do |offer, i|
         sku_id = sku_ids[i]
         qty = sku_quantities[sku_id]
-        shop_data[offer.shop_id] ||= { name: offer.shop_name, items: [] }
+        shop_data[offer.shop_id] ||= { name: offer.shop_name, items: [], free: false }
+        shop_data[offer.shop_id][:free] ||= offer.free_shipping
         shop_data[offer.shop_id][:items] << {
           sku_id: sku_id,
           product_name: offer.product_name,
@@ -29,7 +30,7 @@ module SkroutzCart
 
       shop_data.each do |_shop_id, data|
         subtotal = data[:items].sum { |i| i[:line_total] }
-        shipping = subtotal < Constants::MIN_SHIPPING_THRESHOLD ? Constants::SHIPPING_COST : 0.0
+        shipping = Optimizer.shipping(subtotal, data[:free])
         shop_total = subtotal + shipping
 
         puts "Shop: #{data[:name]}"
@@ -41,6 +42,8 @@ module SkroutzCart
         puts "  Subtotal: €#{'%.2f' % subtotal}"
         if shipping > 0
           puts "  Shipping: €#{'%.2f' % shipping} (order under €#{Constants::MIN_SHIPPING_THRESHOLD})"
+        elsif data[:free]
+          puts '  Shipping: free (Skroutz Hub)'
         else
           puts '  Shipping: free'
         end

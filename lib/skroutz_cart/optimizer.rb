@@ -1,8 +1,13 @@
+require 'set'
 require_relative 'constants'
 require_relative 'models/shop_offer'
 
 module SkroutzCart
   module Optimizer
+    def self.shipping(subtotal, free)
+      free || subtotal >= Constants::MIN_SHIPPING_THRESHOLD ? 0.0 : Constants::SHIPPING_COST
+    end
+
     # ---------------------------------------------------------------------------
     # Branch-and-bound
     # ---------------------------------------------------------------------------
@@ -28,11 +33,9 @@ module SkroutzCart
     end
 
     def self.enumerate(candidates, idx, assign, sku_ids, sku_quantities, best,
-                       price_sum, min_suffix, shop_subtotals, shop_last_index)
+                       price_sum, min_suffix, shop_subtotals, shop_last_index, free_shops)
       if idx == sku_ids.length
-        total = shop_subtotals.sum do |_, sub|
-          sub < Constants::MIN_SHIPPING_THRESHOLD ? sub + Constants::SHIPPING_COST : sub
-        end
+        total = shop_subtotals.sum { |shop_id, sub| sub + shipping(sub, free_shops.include?(shop_id)) }
         if total < best[:cost]
           best[:cost] = total
           best[:assignment] = assign.dup
@@ -42,7 +45,7 @@ module SkroutzCart
 
       definite_shipping = 0.0
       shop_subtotals.each do |shop_id, sub|
-        next if sub >= Constants::MIN_SHIPPING_THRESHOLD
+        next if sub >= Constants::MIN_SHIPPING_THRESHOLD || free_shops.include?(shop_id)
 
         definite_shipping += Constants::SHIPPING_COST if (shop_last_index[shop_id] || -1) < idx
       end
@@ -55,7 +58,7 @@ module SkroutzCart
         prev = shop_subtotals[offer.shop_id] || 0.0
         shop_subtotals[offer.shop_id] = prev + offer.price * qty
         enumerate(candidates, idx + 1, assign, sku_ids, sku_quantities, best,
-                  price_sum + offer.price * qty, min_suffix, shop_subtotals, shop_last_index)
+                  price_sum + offer.price * qty, min_suffix, shop_subtotals, shop_last_index, free_shops)
         prev == 0.0 ? shop_subtotals.delete(offer.shop_id) : shop_subtotals[offer.shop_id] = prev
       end
     end
@@ -70,10 +73,11 @@ module SkroutzCart
 
       min_suffix      = build_min_suffix(candidates, sorted_ids, sku_quantities)
       shop_last_index = build_shop_last_index(candidates)
+      free_shops      = candidates.flatten.select(&:free_shipping).map(&:shop_id).to_set
 
       best = { cost: Float::INFINITY, assignment: nil }
       enumerate(candidates, 0, Array.new(sorted_ids.length), sorted_ids, sku_quantities,
-                best, 0.0, min_suffix, {}, shop_last_index)
+                best, 0.0, min_suffix, {}, shop_last_index, free_shops)
 
       return nil unless best[:assignment]
 
@@ -104,13 +108,13 @@ module SkroutzCart
 
       shop_item_offers.each do |shop_id, item_map|
         shop_mask = item_map.keys.reduce(0) { |m, i| m | (1 << i) }
+        free = item_map.values.any?(&:free_shipping)
 
         sub = shop_mask
         while sub > 0
           total = 0.0
           n.times { |i| total += item_map[i].price * sku_quantities[sku_ids[i]] if (sub >> i) & 1 == 1 }
-          shipping = total < Constants::MIN_SHIPPING_THRESHOLD ? Constants::SHIPPING_COST : 0.0
-          cost = total + shipping
+          cost = total + shipping(total, free)
           if cost < best_cost[sub]
             best_cost[sub]   = cost
             best_shop[sub]   = shop_id
@@ -165,12 +169,12 @@ module SkroutzCart
 
     def self.compute_total_cost(assignment, sku_ids, sku_quantities)
       shop_subtotals = Hash.new(0.0)
+      free_shops = Set.new
       assignment.each_with_index do |offer, i|
         shop_subtotals[offer.shop_id] += offer.price * sku_quantities[sku_ids[i]]
+        free_shops << offer.shop_id if offer.free_shipping
       end
-      shop_subtotals.sum do |_, sub|
-        sub < Constants::MIN_SHIPPING_THRESHOLD ? sub + Constants::SHIPPING_COST : sub
-      end
+      shop_subtotals.sum { |shop_id, sub| sub + shipping(sub, free_shops.include?(shop_id)) }
     end
 
     def self.filter_candidates(sku_offers_map)
@@ -190,6 +194,7 @@ module SkroutzCart
         filtered = offers.select do |o|
           count = shop_sku_count[o.shop_id] || 0
           cutoff = count <= 1 ? min_price : min_price + (count * Constants::SHIPPING_COST)
+          cutoff = [cutoff, min_price + Constants::SHIPPING_COST].max if o.free_shipping
           o.price <= cutoff
         end
         filtered.empty? ? [offers.first] : filtered

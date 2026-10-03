@@ -56,7 +56,8 @@ module SkroutzCart
           shop_name: shop_name,
           price: price,
           product_name: product_name,
-          product_id: product_id.to_i
+          product_id: product_id.to_i,
+          free_shipping: card.include?('class="skroutz-hub"')
         )
       end
 
